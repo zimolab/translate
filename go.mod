@@ -1,4 +1,4 @@
-module translate
+module github.com/zimolab/translate
 
 go 1.19
 
