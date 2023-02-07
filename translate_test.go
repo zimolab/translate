@@ -2,202 +2,143 @@ package translate
 
 import (
 	"embed"
+	"path/filepath"
 	"testing"
 )
 
-//go:embed active.*.toml
-var LocaleFS embed.FS
+const TestDataDir = "test_data"
+
+//go:embed test_data
+var BuiltinTranslations embed.FS
 
 func TestNewTranslator1(t *testing.T) {
-	trans, err := NewTranslator("active", "a.en.toml")
-	if trans != nil || err == nil {
+	defaultTranslationFile := filepath.Join(TestDataDir, "active.en_US.toml")
+	tr, err := NewTranslator("active", nil, defaultTranslationFile)
+	if err != nil {
+		t.Error(err)
+	}
+	if tr.Tr("ID_TEST", "error") != "hello, world!" {
 		t.Fail()
-	} else {
-		t.Log("err:", err)
 	}
 }
 
 func TestNewTranslator2(t *testing.T) {
-	trans, err := NewTranslator("active", "active.en.toml")
-	if trans != nil || err == nil {
+	// 测试无法创建对象的情形
+	// parseLanguage()失败：不符合文件名模式
+	defaultTranslationFile := filepath.Join(TestDataDir, "translate.zh-CN.toml")
+	_, err := NewTranslator("active", nil, defaultTranslationFile)
+	if err == nil {
 		t.Fail()
 	} else {
-		t.Log("err:", err)
+		t.Log("PASS", err)
+	}
+	// parseLanguage()失败：language-tag不符合BCP 47规范
+	defaultTranslationFile = filepath.Join(TestDataDir, "active.mylang.toml")
+	_, err = NewTranslator("active", nil, defaultTranslationFile)
+	if err == nil {
+		t.Fail()
+	} else {
+		t.Log("PASS", err)
+	}
+	// 文件不存在
+	defaultTranslationFile = filepath.Join(TestDataDir, "active.en-US.toml")
+	_, err = NewTranslator("active", nil, defaultTranslationFile)
+	if err == nil {
+		t.Fail()
+	} else {
+		t.Log("PASS", err)
 	}
 }
 
 func TestNewTranslator3(t *testing.T) {
-	trans, err := NewTranslator("active", "active.foo.toml")
-	if trans != nil || err == nil {
+	// 测试从内嵌文件系统加载翻译文件
+	defaultTranslationFile := "test_data/active.zh_CN.toml"
+	_, err := NewTranslator("active", BuiltinTranslations, defaultTranslationFile)
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func TestTranslator_LoadTranslationFile(t *testing.T) {
+	defaultTranslationFile := filepath.Join(TestDataDir, "active.en_US.toml")
+	tr, err := NewTranslator("active", nil, defaultTranslationFile)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = tr.LoadTranslationFile(nil, filepath.Join(TestDataDir, "active.zh_CN.toml"))
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = tr.LoadTranslationFile(BuiltinTranslations, "test_data/active.zh-CN.toml")
+	if err != nil {
+		t.Error(err)
+	}
+
+	trs := tr.AllTranslations(true)
+	if len(trs) != 3 {
 		t.Fail()
 	} else {
-		t.Log("err:", err)
+		t.Log("translations:", trs)
+		t.Log("tags:", tr.bundle.LanguageTags())
 	}
+
 }
 
-func TestNewTranslator4(t *testing.T) {
-	trans, err := NewTranslator("active", "test_data/active.zh.toml")
-	if trans != nil || err == nil {
-		t.Fail()
-	} else {
-		t.Log("err:", err)
-	}
-}
-
-func TestNewTranslator5(t *testing.T) {
-	trans, err := NewTranslator("active", "test_data/active.zh_CN.toml")
+func TestTranslator_SetTranslation(t *testing.T) {
+	// 创建实例，并将active.en_US.toml加载为默认翻译文件
+	defaultTranslationFile := filepath.Join(TestDataDir, "active.en_US.toml")
+	tr, err := NewTranslator("active", nil, defaultTranslationFile)
 	if err != nil {
 		t.Error(err)
-		t.Fail()
 	}
-
-	if trans.currentTag != "zh_CN" {
-		t.Fail()
-	}
-
-	t.Log(trans.tagMap)
-}
-
-func TestNewTranslator6(t *testing.T) {
-	trans, err := NewTranslator("active", "test_data/active.zh-CN.toml")
+	// 加载active.zh_CN.toml
+	err = tr.LoadTranslationFile(nil, filepath.Join(TestDataDir, "active.zh_CN.toml"))
 	if err != nil {
 		t.Error(err)
+	}
+	// 获取ID_TEST对应文本
+	if tr.Tr("ID_TEST", "error") != "hello, world!" {
+		t.Log("logic error")
 		t.Fail()
 	}
-
-	if trans.currentTag != "zh-CN" {
-		t.Fail()
-	}
-
-	t.Log(trans.tagMap)
-}
-
-func TestTranslator_LoadTranslateFile(t *testing.T) {
-	trans, err := NewTranslator("active", "./test_data/active.zh_CN.toml")
+	// 切换翻译语言
+	err = tr.SetTranslation("简体中文")
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
 	}
-	err = trans.LoadTranslateFile("active.toml")
+	// 再次获取ID_TEST对应文本
+	if tr.Tr("ID_TEST", "error") != "你好，世界！" {
+		t.Log("logic error")
+		t.Fail()
+	}
+	// 切换未被加载的语言
+	err = tr.SetTranslation("中文")
 	if err == nil {
+		t.Log("logic error")
 		t.Fail()
 	}
-	err = trans.LoadTranslateFile("active.foo.toml")
-	if err == nil {
-		t.Fail()
-	}
-	err = trans.LoadTranslateFile("active.en_US.toml")
-	if err != nil {
-		t.Fail()
-	}
-	err = trans.LoadTranslateFile("./test_data/active.en_US.toml")
+	// 测试翻译文件覆盖效果
+	// zh-CN、zh_CN会被视为同一种语言
+	// 因此后加载的active.zh-CN.toml会覆盖前面加载的active.zh_CN.toml
+	err = tr.LoadTranslationFile(nil, filepath.Join(TestDataDir, "active.zh-CN.toml"))
 	if err != nil {
 		t.Error(err)
+	}
+	if tr.Tr("ID_TEST", "error") != "世界，你好！" {
+		t.Log("logic error")
 		t.Fail()
 	}
-}
-
-func TestTranslator_SetCurrentTranslation(t *testing.T) {
-	trans, err := NewTranslator("active", "./test_data/active.zh_CN.toml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = trans.LoadTranslateFile("./test_data/active.en_US.toml")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Log(trans.tagMap)
-	t.Log(trans.localizer)
-	t.Log(trans.currentTag)
-
-	err = trans.SetCurrentTranslation("简体中文")
+	msg1 := tr.Tr("ID_TEST", "error1")
+	// 且此时“简体中文”、“中文”两个displayName都对应了同一个zh—CN标签
+	err = tr.SetTranslation("中文")
 	if err != nil {
 		t.Error(err)
+	}
+	msg2 := tr.Tr("ID_TEST", "error2")
+	if msg1 != msg2 {
+		t.Log("logic error")
 		t.Fail()
 	}
-	t.Log(trans.localizer)
-	t.Log(trans.currentTag)
-
-	err = trans.SetCurrentTranslation("en_US")
-	if err != nil {
-		t.Error(err)
-		t.Fail()
-	}
-	t.Log(trans.localizer)
-	t.Log(trans.currentTag)
-
-	err = trans.SetCurrentTranslation("en-US")
-	if err == nil {
-		t.Error(err)
-		t.Fail()
-	} else {
-		t.Log(err.Error())
-	}
-	t.Log(trans.localizer)
-	t.Log(trans.currentTag)
-
-}
-
-func TestFSFunc(t *testing.T) {
-	transFS, err := NewTranslatorFS("active", LocaleFS, "active.zh_CN.toml")
-	if err != nil {
-		t.Error(err)
-		t.Fail()
-	}
-	t.Log(transFS.tagMap)
-	t.Log(transFS.currentTag)
-	t.Log(transFS.localizer)
-
-	err = transFS.LoadTranslateFileFS(LocaleFS, "active.en_US.toml")
-	if err != nil {
-		t.Error(err)
-		t.Fail()
-	}
-	t.Log(transFS.tagMap)
-	t.Log(transFS.currentTag)
-	t.Log(transFS.localizer)
-
-	err = transFS.SetCurrentTranslation("en_US")
-	if err != nil {
-		t.Error(err)
-		t.Fail()
-	}
-	t.Log(transFS.tagMap)
-	t.Log(transFS.currentTag)
-	t.Log(transFS.localizer)
-
-}
-
-func TestTranslator_Translate(t *testing.T) {
-	transFS, err := NewTranslatorFS("active", LocaleFS, "active.zh_CN.toml")
-	if err != nil {
-		t.Error(err)
-		t.Fail()
-	}
-
-	err = transFS.LoadTranslateFileFS(LocaleFS, "active.en_US.toml")
-	if err != nil {
-		t.Error(err)
-		t.Fail()
-	}
-
-	t.Log(transFS.tagMap)
-	t.Log(transFS.currentTag)
-	t.Log(transFS.localizer)
-
-	msg1 := transFS.Translate("ID_TEST", "fallback")
-	t.Log("msg1:", msg1)
-
-	err = transFS.SetCurrentTranslation("en_US")
-	if err != nil {
-		t.Error(err)
-		t.Fail()
-	}
-	t.Log("\n")
-	t.Log(transFS.tagMap)
-	t.Log(transFS.currentTag)
-	t.Log(transFS.localizer)
-	msg2 := transFS.Translate("ID_TEST", "fallback")
-	t.Log("msg2:", msg2)
-
 }

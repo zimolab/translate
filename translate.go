@@ -8,203 +8,177 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
+	"sort"
 )
 
-type _meta struct {
+// 翻译文件的文件名模式：<prefix>.<lang-tag>.toml
+var filenamePattern = `%s\.([\w-]+)\.toml`
+
+type displayname struct {
 	Display string
 }
 
 type Translator struct {
-	translateFilePrefix string
-	translateFileRegExp *regexp.Regexp
-	bundle              *i18n.Bundle
-	tagMap              map[string]string
-	currentTag          string
-	localizer           *i18n.Localizer
+	// 翻译文件前缀
+	prefix string
+	// 翻译文件名匹配模式
+	regex *regexp.Regexp
+	// i18n bundle
+	bundle *i18n.Bundle
+	// language tag映射表：显示名 -> tag
+	languages map[string]string
+	// 当前Localizer
+	localizer *i18n.Localizer
 }
 
-func NewTranslator(translateFilePrefix string, defaultTranslateFile string) (*Translator, error) {
+// NewTranslator
+//
+//	@Description: 创建Translator对象
+//	@param prefix 翻译文件名前缀
+//	@param fsys fs.FS，为nil则代表从磁盘读取文件
+//	@param defaultFile 默认翻译文件
+//	@return *Translator
+//	@return error
+func NewTranslator(prefix string, fsys fs.FS, defaultFile string) (*Translator, error) {
 
-	t, err := createTranslator(translateFilePrefix, defaultTranslateFile)
-	if err != nil {
-		return nil, err
-	}
-
-	displayName, err := t.getDisplayName(defaultTranslateFile)
-	if err != nil {
-		return nil, err
-	}
-	if displayName == "" {
-		displayName = t.currentTag
-	}
-	t.tagMap[displayName] = t.currentTag
-
-	_, err = t.bundle.LoadMessageFile(defaultTranslateFile)
-	if err != nil {
-		return nil, err
-	}
-
-	t.localizer = i18n.NewLocalizer(t.bundle, t.currentTag)
-
-	return t, nil
-}
-
-func NewTranslatorFS(translateFilePrefix string, fs fs.FS, defaultTranslateFile string) (*Translator, error) {
-
-	t, err := createTranslator(translateFilePrefix, defaultTranslateFile)
-	if err != nil {
-		return nil, err
-	}
-
-	displayName, err := t.getDisplayNameFS(fs, defaultTranslateFile)
-	if err != nil {
-		return nil, err
-	}
-	if displayName == "" {
-		displayName = t.currentTag
-	}
-	t.tagMap[displayName] = t.currentTag
-
-	_, err = t.bundle.LoadMessageFile(defaultTranslateFile)
-	if err != nil {
-		return nil, err
-	}
-
-	t.localizer = i18n.NewLocalizer(t.bundle, t.currentTag)
-
-	return t, nil
-}
-
-func createTranslator(translateFilePrefix string, defaultTranslateFile string) (*Translator, error) {
 	t := &Translator{}
 
-	t.translateFilePrefix = translateFilePrefix
-	t.tagMap = map[string]string{}
+	t.prefix = prefix
+	t.languages = map[string]string{}
+	t.regex = regexp.MustCompile(fmt.Sprintf(filenamePattern, prefix))
 
-	t.translateFileRegExp = regexp.MustCompile(fmt.Sprintf(`%s\.([\w-]+)\.toml`, translateFilePrefix))
-
-	langTag := t.getLangTag(defaultTranslateFile)
-	if langTag == "" {
-		return nil, illegalFilename(langTag)
-	}
-
-	lang, err := language.Parse(langTag)
+	// 从默认翻译文件的文件名中解析langTag、tagName
+	langTag, tagName, err := t.parseLanguageTag(defaultFile)
 	if err != nil {
-		return nil, illegalLanguageTag(langTag)
+		return nil, err
 	}
 
-	t.currentTag = langTag
-	t.bundle = i18n.NewBundle(lang)
+	// 创建bundle
+	t.bundle = i18n.NewBundle(*langTag)
+	// 注册反序列化方法，使用toml作为翻译文件格式
 	t.bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
 
+	// 加载默认翻译文件
+	err = t.LoadTranslationFile(fsys, defaultFile)
+	if err != nil {
+		return nil, err
+	}
+	// 创建初始localizer
+	t.localizer = i18n.NewLocalizer(t.bundle, tagName)
 	return t, nil
 }
 
-func (t *Translator) getLangTag(filename string) string {
-	tag := t.translateFileRegExp.FindStringSubmatch(filename)
-	if tag == nil || len(tag) <= 1 {
-		return ""
+// 从文件名中解析语言标签，成功解析需要满足以下两点：
+// 1.文件名的形式符合<prefix>.<language_tag>.toml的格式，换言之，可以被fileRegExp正则表达式匹配
+// 2.language_tag本身符合BCP 47规则，即能够通过language.Parse()方法的解析
+func (t *Translator) parseLanguageTag(filename string) (langTag *language.Tag, tagName string, err error) {
+	// 利用正则表达式，匹配出文件名中的language tagName
+	// 如<prefix>.zh_CN.toml => tagName == "zh_CN"
+	// 如<prefix>.en-US.toml => tagName == "en-US"
+	result := t.regex.FindStringSubmatch(filename)
+	if len(result) < 2 {
+		return nil, "", illegalFilename(filename)
 	}
-	return tag[1]
+	tagName = result[1]
+	if tagName == "" {
+		return nil, "", illegalFilename(filename)
+	}
+	// 解析该tag，确保其tag符合BCP 47等规则
+	tmp, err := language.Parse(tagName)
+	if err != nil {
+		return nil, "", err
+	}
+	if &tmp == nil {
+		return nil, "", illegalFilename(filename)
+	}
+	// 返回解析出的language.Tag对象、tag名称
+	langTag = &tmp
+	return langTag, tagName, nil
 }
 
-func (t *Translator) getDisplayName(path string) (string, error) {
-	meta := _meta{}
-	_, err := toml.DecodeFile(path, &meta)
+// 从翻译文件（toml文件）中解析该翻译文件对应语言的显示名称
+// 该名称由Display字段定义，如：
+// # <prefix>.zh-CN.toml
+// Display = "简体中文"
+func (t *Translator) parseDisplayName(fsys fs.FS, path string) (string, error) {
+	m := displayname{}
+	var err error
+	if fsys == nil {
+		_, err = toml.DecodeFile(path, &m)
+	} else {
+		_, err = toml.DecodeFS(fsys, path, &m)
+	}
 	if err != nil {
 		return "", err
 	}
-	return meta.Display, nil
+	return m.Display, nil
 }
 
-func (t *Translator) getDisplayNameFS(fs fs.FS, path string) (string, error) {
-	meta := _meta{}
-	_, err := toml.DecodeFS(fs, path, &meta)
-	if err != nil {
-		return "", err
-	}
-	return meta.Display, nil
-}
-
-func (t *Translator) IsLanguageTagLegal(tag string) bool {
-	_, err := language.Parse(tag)
-	return err == nil
-}
-
-func (t *Translator) LoadTranslateFile(path string) error {
+// LoadTranslationFile
+//
+//	@Description: 加载翻译文件，并解析其语言标签和显示名
+//	@receiver t
+//	@param fsys 文件系统，若为nil，则从磁盘读取
+//	@param path 文件路径
+//	@return error
+func (t *Translator) LoadTranslationFile(fsys fs.FS, path string) error {
 	filename := filepath.Base(path)
-	tag := t.getLangTag(filename)
-	if tag == "" {
-		return illegalFilename(filename)
+	// 解析tag
+	_, tag, err := t.parseLanguageTag(filename)
+	if err != nil {
+		return err
 	}
-
-	if !t.IsLanguageTagLegal(tag) {
-		return illegalLanguageTag(tag)
-	}
-
-	displayName, err := t.getDisplayName(path)
+	// 解析显示名
+	displayName, err := t.parseDisplayName(fsys, path)
 	if err != nil {
 		return err
 	}
 	if displayName == "" {
 		displayName = tag
 	}
-
-	_, err = t.bundle.LoadMessageFile(path)
+	// 加载文件
+	if fsys == nil {
+		_, err = t.bundle.LoadMessageFile(path)
+	} else {
+		_, err = t.bundle.LoadMessageFileFS(fsys, path)
+	}
 	if err != nil {
 		return err
 	}
-
-	t.tagMap[displayName] = tag
-
+	// 文件加载成功，将displayName与tag关联起来
+	t.languages[displayName] = tag
 	return nil
 }
 
-func (t *Translator) LoadTranslateFileFS(fs fs.FS, path string) error {
-	filename := filepath.Base(path)
-	tag := t.getLangTag(filename)
-	if tag == "" {
-		return illegalFilename(filename)
+// SetTranslation
+//
+//	@Description: 设置当前翻译
+//	@receiver t
+//	@param displayName
+//	@return error
+func (t *Translator) SetTranslation(displayName string) error {
+	// 获取显示名所对应tag
+	tagName, ok := t.languages[displayName]
+	if !ok {
+		return notLoaded(displayName)
 	}
-
-	if !t.IsLanguageTagLegal(tag) {
-		return illegalLanguageTag(tag)
-	}
-
-	displayName, err := t.getDisplayNameFS(fs, path)
-	if err != nil {
-		return err
-	}
-	if displayName == "" {
-		displayName = tag
-	}
-
-	_, err = t.bundle.LoadMessageFileFS(fs, path)
-	if err != nil {
-		return err
-	}
-
-	t.tagMap[displayName] = tag
-
+	t.localizer = i18n.NewLocalizer(t.bundle, tagName)
 	return nil
 }
 
-func (t *Translator) LanguageTagOf(displayName string) string {
-	tag, ok := t.tagMap[displayName]
-	if ok {
-		return tag
+func (t *Translator) AllTranslations(shouldSort bool) []string {
+	if len(t.languages) == 0 {
+		return nil
 	}
-	return ""
-}
-
-func (t *Translator) SetCurrentTranslation(displayName string) error {
-	tag := t.LanguageTagOf(displayName)
-	if tag == "" {
-		return translationNotLoaded(displayName)
+	keys := make([]string, 0, len(t.languages))
+	for _, key := range t.languages {
+		keys = append(keys, key)
 	}
-	t.currentTag = tag
-	t.localizer = i18n.NewLocalizer(t.bundle, tag)
-	return nil
+	if shouldSort {
+		// 排序后再返回，确保显示顺序的一致性
+		sort.Strings(keys)
+	}
+	return keys
 }
 
 func (t *Translator) Translate(messageId string, fallback string) string {
@@ -222,6 +196,10 @@ func (t *Translator) Translate(messageId string, fallback string) string {
 	}
 }
 
-func (t *Translator) GetCurrentLocalizer() *i18n.Localizer {
+func (t *Translator) Tr(messageId string, fallback string) string {
+	return t.Translate(messageId, fallback)
+}
+
+func (t *Translator) Localizer() *i18n.Localizer {
 	return t.localizer
 }
