@@ -39,7 +39,22 @@ func NewLocales(localeFilenamePrefix string, defaultLanguage string) (*Locales, 
 	l.bundle = i18n.NewBundle(tag)
 	l.bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
 	return l, err
+}
 
+func NewLocalesWith(localeFilenamePrefix string, fsys fs.FS, initialLocaleFile string) (*Locales, error) {
+	l, err := NewLocales(localeFilenamePrefix, "art")
+	if err != nil {
+		return nil, err
+	}
+	_, tagName, err := l.LoadLocaleFile(fsys, initialLocaleFile)
+	if err != nil {
+		return nil, err
+	}
+	_, err = l.SetLocaleByTag(tagName)
+	if err != nil {
+		return nil, err
+	}
+	return l, nil
 }
 
 func (l *Locales) LoadLocaleFile(fsys fs.FS, path string) (displayName, tagName string, err error) {
@@ -154,6 +169,14 @@ func (l *Locales) Tr(id string) (string, error) {
 	return l.Localize(&i18n.LocalizeConfig{
 		MessageID: id,
 	})
+}
+
+func (l *Locales) MustTr(id string, fallback string) string {
+	trans, err := l.Tr(id)
+	if err != nil {
+		return fallback
+	}
+	return trans
 }
 
 func (l *Locales) Localize(config *i18n.LocalizeConfig) (string, error) {

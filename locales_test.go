@@ -37,6 +37,17 @@ func TestNewLocales_4(t *testing.T) {
 	t.Log("illegal language-tag produces an error: ", err)
 }
 
+func TestNewLocalesWith(t *testing.T) {
+	locales, err := NewLocalesWith("active", embedFs, "test_data/active.en-US.toml")
+	if err != nil {
+		t.Error(err)
+	} else {
+		if locales.MustTr("ID_TEST2", "fallback") != "hello there!" {
+			t.Error("Logic Error")
+		}
+	}
+}
+
 func TestLocales_LoadLocaleFile_1(t *testing.T) {
 	t.Log("Load a locale file")
 	locales, _ := NewLocales("active", "art")
@@ -292,4 +303,17 @@ func TestLocales_LoadLocalesDir2(t *testing.T) {
 	t.Log("success: ", success)
 	t.Log("fail: ", fail)
 	t.Log(err)
+}
+
+func TestLocales_Tr(t *testing.T) {
+	locales, _ := NewLocales("active", "art")
+	_, _, _ = locales.LoadLocaleFile(embedFs, "test_data/active.en-US.toml")
+	_, _, _ = locales.LoadLocaleFile(embedFs, "test_data/active.zh-CN.toml")
+	_, _ = locales.SetLocaleByName("中文")
+	if locales.MustTr("ID_TEST", "fallback") != "世界，你好！" {
+		t.Error("Logic Error")
+	}
+	if locales.MustTr("FOO", "fallback") != "fallback" {
+		t.Error("Logic Error")
+	}
 }
