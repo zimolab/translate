@@ -220,7 +220,12 @@ func (l *Locales) Localize(config *i18n.LocalizeConfig) (string, error) {
 	if err == nil {
 		return localized, err
 	}
-	if l.fallbackLocalizer != nil && l.currentLocale != l.fallbackLocale {
+
+	if l.currentLocale == l.fallbackLocale {
+		return localized, err
+	}
+
+	if l.fallbackLocalizer != nil {
 		localized, err = l.fallbackLocalizer.Localize(config)
 	}
 	return localized, err
