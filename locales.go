@@ -20,17 +20,23 @@ type _LocaleFileMeta struct {
 }
 
 type Locales struct {
-	regex     *regexp.Regexp
-	bundle    *i18n.Bundle
-	languages *treebidimap.Map
-	localizer *i18n.Localizer
+	regex             *regexp.Regexp
+	bundle            *i18n.Bundle
+	languages         *treebidimap.Map
+	localizer         *i18n.Localizer
+	currentLocale     string
+	fallbackLocalizer *i18n.Localizer
+	fallbackLocale    string
 }
 
 func NewLocales(localeFilenamePrefix string, defaultLanguage string) (*Locales, error) {
 	l := &Locales{
-		regex:     regexp.MustCompile(f(localeFilenamePattern, localeFilenamePrefix)),
-		languages: treebidimap.NewWithStringComparators(),
-		localizer: nil,
+		regex:             regexp.MustCompile(f(localeFilenamePattern, localeFilenamePrefix)),
+		languages:         treebidimap.NewWithStringComparators(),
+		localizer:         nil,
+		currentLocale:     "",
+		fallbackLocalizer: nil,
+		fallbackLocale:    "",
 	}
 	tag, err := language.Parse(defaultLanguage)
 	if err != nil {
@@ -50,7 +56,7 @@ func NewLocalesWith(localeFilenamePrefix string, fsys fs.FS, initialLocaleFile s
 	if err != nil {
 		return nil, err
 	}
-	_, err = l.SetLocaleByTag(tagName)
+	_, err = l.SetLocale(tagName)
 	if err != nil {
 		return nil, err
 	}
@@ -111,24 +117,42 @@ func (l *Locales) LoadLocalesDir(dir string) (success []string, fail []string, e
 	return success, fail, nil
 }
 
-func (l *Locales) SetLocaleByName(displayName string) (tagName string, err error) {
+func (l *Locales) SetLocaleByDisplayName(displayName string) (tagName string, err error) {
 	tmp, ok := l.languages.Get(displayName)
 	if !ok {
 		return "", notLoaded(displayName)
 	}
 	tagName = tmp.(string)
+	l.currentLocale = tagName
 	l.localizer = i18n.NewLocalizer(l.bundle, tagName)
 	return tagName, nil
 }
 
-func (l *Locales) SetLocaleByTag(tagName string) (displayName string, err error) {
+func (l *Locales) SetLocale(tagName string) (displayName string, err error) {
 	tmp, ok := l.languages.GetKey(tagName)
 	if !ok {
 		return "", notLoaded(tagName)
 	}
 	displayName = tmp.(string)
+	l.currentLocale = tagName
 	l.localizer = i18n.NewLocalizer(l.bundle, tagName)
 	return displayName, nil
+}
+
+func (l *Locales) SetFallbackLocale(tagName string) (displayName string, err error) {
+	tmp, ok := l.languages.GetKey(tagName)
+	if !ok {
+		return "", notLoaded(tagName)
+	}
+	displayName = tmp.(string)
+	l.fallbackLocale = tagName
+	l.fallbackLocalizer = i18n.NewLocalizer(l.bundle, tagName)
+	return displayName, nil
+}
+
+func (l *Locales) ClearFallbackLocal() {
+	l.fallbackLocale = ""
+	l.fallbackLocalizer = nil
 }
 
 func (l *Locales) TagNameOf(displayName string) (tagName string, err error) {
@@ -165,10 +189,19 @@ func (l *Locales) GetLocaleNames() (displayNames []string) {
 	return displayNames
 }
 
+func (l *Locales) CurrentLocale() (tagName string) {
+	return l.currentLocale
+}
+
+func (l *Locales) FallbackLocale() (tagName string) {
+	return l.fallbackLocale
+}
+
 func (l *Locales) Tr(id string) (string, error) {
-	return l.Localize(&i18n.LocalizeConfig{
+	config := i18n.LocalizeConfig{
 		MessageID: id,
-	})
+	}
+	return l.Localize(&config)
 }
 
 func (l *Locales) MustTr(id string, fallback string) string {
@@ -183,7 +216,14 @@ func (l *Locales) Localize(config *i18n.LocalizeConfig) (string, error) {
 	if l.localizer == nil {
 		return "", localeNotSet()
 	}
-	return l.localizer.Localize(config)
+	localized, err := l.localizer.Localize(config)
+	if err == nil {
+		return localized, err
+	}
+	if l.fallbackLocalizer != nil && l.currentLocale != l.fallbackLocale {
+		localized, err = l.fallbackLocalizer.Localize(config)
+	}
+	return localized, err
 }
 
 func (l *Locales) loadFile(fsys fs.FS, path string) error {

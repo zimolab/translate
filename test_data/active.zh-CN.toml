@@ -1,3 +1,6 @@
 displayname = "中文"
 [ID_TEST]
 other="世界，你好！"
+
+[ID_TEST3]
+other = "这是一条测试信息"

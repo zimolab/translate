@@ -221,7 +221,7 @@ func TestLocales_SetLocaleByName(t *testing.T) {
 		t.Log("invoke locales.Tr() before locales.SetLocaleBy**() should produce an error: ", err)
 		t.Log("\n")
 	}
-	tagName, _ := locales.SetLocaleByName("中文")
+	tagName, _ := locales.SetLocaleByDisplayName("中文")
 	t.Log("current tag: ", tagName)
 	msg, _ := locales.Tr("ID_TEST")
 	if msg != "世界，你好！" {
@@ -229,7 +229,7 @@ func TestLocales_SetLocaleByName(t *testing.T) {
 	}
 	t.Log("translated: ", msg)
 
-	tagName, _ = locales.SetLocaleByName("English(US)")
+	tagName, _ = locales.SetLocaleByDisplayName("English(US)")
 	t.Log("current tag: ", tagName)
 	msg, _ = locales.Tr("ID_TEST")
 	if msg != "hello, world!" {
@@ -237,11 +237,11 @@ func TestLocales_SetLocaleByName(t *testing.T) {
 	}
 	t.Log("translated: ", msg)
 
-	tagName, err = locales.SetLocaleByName("English")
+	tagName, err = locales.SetLocaleByDisplayName("English")
 	if err == nil {
 		t.Error("Logic Error")
 	} else {
-		t.Log("locales.SetLocaleByName() with an unloaded locale should produce an error: ", err)
+		t.Log("locales.SetLocaleByDisplayName() with an unloaded locale should produce an error: ", err)
 	}
 }
 
@@ -256,7 +256,7 @@ func TestLocales_SetLocaleByTag(t *testing.T) {
 	} else {
 		t.Log("invoke locales.Tr() before locales.SetLocaleBy**() should produce an error: ", err)
 	}
-	displayName, _ := locales.SetLocaleByTag("zh-CN")
+	displayName, _ := locales.SetLocale("zh-CN")
 	t.Log("current tag: ", displayName)
 	msg, _ := locales.Tr("ID_TEST")
 	if msg != "世界，你好！" {
@@ -264,7 +264,7 @@ func TestLocales_SetLocaleByTag(t *testing.T) {
 	}
 	t.Log("translated: ", msg)
 
-	displayName, _ = locales.SetLocaleByTag("en-US")
+	displayName, _ = locales.SetLocale("en-US")
 	t.Log("current tag: ", displayName)
 	msg, _ = locales.Tr("ID_TEST")
 	if msg != "hello, world!" {
@@ -272,11 +272,11 @@ func TestLocales_SetLocaleByTag(t *testing.T) {
 	}
 	t.Log("translated: ", msg)
 
-	displayName, err = locales.SetLocaleByTag("en")
+	displayName, err = locales.SetLocale("en")
 	if err == nil {
 		t.Error("Logic Error")
 	} else {
-		t.Log("locales.SetLocaleByTag() with an unloaded locale should produce an error: ", err)
+		t.Log("locales.SetLocale() with an unloaded locale should produce an error: ", err)
 	}
 }
 
@@ -309,11 +309,65 @@ func TestLocales_Tr(t *testing.T) {
 	locales, _ := NewLocales("active", "art")
 	_, _, _ = locales.LoadLocaleFile(embedFs, "test_data/active.en-US.toml")
 	_, _, _ = locales.LoadLocaleFile(embedFs, "test_data/active.zh-CN.toml")
-	_, _ = locales.SetLocaleByName("中文")
+	_, _ = locales.SetLocaleByDisplayName("中文")
 	if locales.MustTr("ID_TEST", "fallback") != "世界，你好！" {
 		t.Error("Logic Error")
 	}
 	if locales.MustTr("FOO", "fallback") != "fallback" {
+		t.Error("Logic Error")
+	}
+}
+
+func TestLocales_SetFallbackLocale(t *testing.T) {
+	locales, _ := NewLocales("active", "art")
+	t.Log(locales.CurrentLocale(), locales.FallbackLocale())
+
+	_, _, _ = locales.LoadLocaleFile(embedFs, "test_data/active.en-US.toml")
+	_, _, _ = locales.LoadLocaleFile(embedFs, "test_data/active.zh-CN.toml")
+	t.Log(locales.CurrentLocale(), locales.FallbackLocale())
+
+	_, _ = locales.SetLocaleByDisplayName("中文")
+	t.Log(locales.CurrentLocale(), locales.FallbackLocale())
+
+	_, err := locales.Tr("ID_TEST2")
+	if err == nil {
+		t.Error("Logic Error")
+	}
+
+	_, _ = locales.SetFallbackLocale("en-US")
+	t.Log(locales.CurrentLocale(), locales.FallbackLocale())
+
+	msg, err := locales.Tr("ID_TEST2")
+	if msg != "hello there!" {
+		t.Error("Logic Error")
+	}
+
+	_, _ = locales.SetLocale("en-US")
+	locales.ClearFallbackLocal()
+	t.Log(locales.CurrentLocale(), locales.FallbackLocale())
+
+	msg, err = locales.Tr("ID_TEST")
+	if msg != "hello, world!" {
+		t.Error("Logic Error")
+	}
+
+	msg, err = locales.Tr("ID_TEST3")
+	if err == nil {
+		t.Error("Logic Error")
+	}
+
+	_, _ = locales.SetFallbackLocale("zh-CN")
+	t.Log(locales.CurrentLocale(), locales.FallbackLocale())
+
+	msg, err = locales.Tr("ID_TEST3")
+	if msg != "这是一条测试信息" {
+		t.Error("Logic Error")
+	}
+
+	_, _ = locales.SetFallbackLocale("en-US")
+	t.Log(locales.CurrentLocale(), locales.FallbackLocale())
+	msg, err = locales.Tr("ID_TEST3")
+	if err == nil {
 		t.Error("Logic Error")
 	}
 }
